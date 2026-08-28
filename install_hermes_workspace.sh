@@ -1,3 +1,4 @@
+```bash
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -11,16 +12,22 @@ set -Eeuo pipefail
 # Services:
 #   Hermes Gateway   : 127.0.0.1:8642
 #   Hermes Dashboard : 127.0.0.1:9119
-#   Workspace        : 127.0.0.1:3000
+#   Workspace        : 0.0.0.0:3000
+#
+# Remote access:
+#   Tailscale / LAN
+#
+# Security:
+#   HERMES_PASSWORD is automatically generated if missing.
 #
 # No Nginx required.
 # ============================================================
 
 export DEBIAN_FRONTEND=noninteractive
 
-# -----------------------------
+# ------------------------------------------------------------
 # Configuration
-# -----------------------------
+# ------------------------------------------------------------
 
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-$HOME/hermes-workspace}"
@@ -31,19 +38,21 @@ GATEWAY_PORT="${GATEWAY_PORT:-8642}"
 DASHBOARD_HOST="${DASHBOARD_HOST:-127.0.0.1}"
 DASHBOARD_PORT="${DASHBOARD_PORT:-9119}"
 
+# Workspace must listen on non-loopback for remote access.
 WORKSPACE_HOST="${WORKSPACE_HOST:-0.0.0.0}"
 WORKSPACE_PORT="${WORKSPACE_PORT:-3000}"
 
-AGENT_REPO="https://github.com/NousResearch/hermes-agent.git"
-WORKSPACE_REPO="https://github.com/outsourc-e/hermes-workspace.git"
-
 AGENT_INSTALLER="https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"
+WORKSPACE_REPO="https://github.com/outsourc-e/hermes-workspace.git"
 
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 
-# -----------------------------
+HERMES_ENV="$HERMES_HOME/.env"
+WORKSPACE_ENV="$WORKSPACE_DIR/.env"
+
+# ------------------------------------------------------------
 # Colors
-# -----------------------------
+# ------------------------------------------------------------
 
 cyan()   { printf '\033[36m%s\033[0m\n' "$*"; }
 green()  { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -57,17 +66,11 @@ die() {
     exit 1
 }
 
-# -----------------------------
-# Trap
-# -----------------------------
-
 trap 'red "Installation failed at line $LINENO"' ERR
 
-# -----------------------------
+# ------------------------------------------------------------
 # Banner
-# -----------------------------
-
-clear 2>/dev/null || true
+# ------------------------------------------------------------
 
 cat <<'EOF'
 
@@ -76,53 +79,48 @@ cat <<'EOF'
 ============================================================
 
    Hermes Agent      : NousResearch
-   Hermes Dashboard  : API :9119
-   Hermes Gateway    : API :8642
-   Hermes Workspace  : Web :3000
+   Hermes Gateway    : 127.0.0.1:8642
+   Hermes Dashboard  : 127.0.0.1:9119
+   Hermes Workspace  : 0.0.0.0:3000
 
-   Ubuntu 24.04
-   systemd
-   No Nginx
-   Production mode
+   Remote access     : Tailscale / LAN
+   Authentication    : HERMES_PASSWORD
+   Init system       : systemd --user
+
+   No Nginx required.
 
 ============================================================
 
 EOF
 
-# -----------------------------
-# Check OS
-# -----------------------------
+# ------------------------------------------------------------
+# OS
+# ------------------------------------------------------------
 
-cyan "[1/12] Checking operating system..."
+cyan "[1/13] Checking operating system..."
 
 if [[ ! -f /etc/os-release ]]; then
-    die "/etc/os-release not found"
+    die "/etc/os-release not found."
 fi
 
 source /etc/os-release
 
-if [[ "$ID" != "ubuntu" ]]; then
-    yellow "Warning: This script was designed for Ubuntu."
-fi
-
 green "OS: ${PRETTY_NAME:-unknown}"
 
-# -----------------------------
-# Check user
-# -----------------------------
+# ------------------------------------------------------------
+# User
+# ------------------------------------------------------------
 
-cyan "[2/12] Checking user..."
+cyan "[2/13] Checking user..."
 
 if [[ "$EUID" -eq 0 ]]; then
-    die "Do NOT run this script as root.
+    die "Do not run this installer as root.
 
 Run:
 
-  bash install-hermes.sh
+    ./install-hermes.sh
 
-as your normal user.
-
-The script uses ~/.hermes and systemd --user."
+as your normal Linux user."
 fi
 
 USER_NAME="$(id -un)"
@@ -131,11 +129,11 @@ USER_HOME="$HOME"
 green "User: $USER_NAME"
 green "Home: $USER_HOME"
 
-# -----------------------------
-# Install OS dependencies
-# -----------------------------
+# ------------------------------------------------------------
+# Dependencies
+# ------------------------------------------------------------
 
-cyan "[3/12] Installing system dependencies..."
+cyan "[3/13] Installing system dependencies..."
 
 sudo apt-get update
 
@@ -155,15 +153,16 @@ sudo apt-get install -y \
     tmux \
     jq \
     unzip \
-    wget
+    wget \
+    openssl
 
 green "System dependencies installed."
 
-# -----------------------------
+# ------------------------------------------------------------
 # Node.js 22
-# -----------------------------
+# ------------------------------------------------------------
 
-cyan "[4/12] Installing / checking Node.js..."
+cyan "[4/13] Checking Node.js..."
 
 NODE_MAJOR=0
 
@@ -189,11 +188,11 @@ fi
 
 green "Node.js: $(node --version)"
 
-# -----------------------------
+# ------------------------------------------------------------
 # pnpm
-# -----------------------------
+# ------------------------------------------------------------
 
-cyan "[5/12] Installing pnpm..."
+cyan "[5/13] Checking pnpm..."
 
 if ! command -v pnpm >/dev/null 2>&1; then
 
@@ -201,25 +200,28 @@ if ! command -v pnpm >/dev/null 2>&1; then
         sudo corepack enable || true
         corepack prepare pnpm@latest --activate || true
     fi
+
 fi
 
 if ! command -v pnpm >/dev/null 2>&1; then
     sudo npm install -g pnpm
 fi
 
+PNPM_BIN="$(command -v pnpm)"
+
 green "pnpm: $(pnpm --version)"
 
-# -----------------------------
+# ------------------------------------------------------------
 # Hermes Agent
-# -----------------------------
+# ------------------------------------------------------------
 
-cyan "[6/12] Installing Hermes Agent..."
+cyan "[6/13] Installing Hermes Agent..."
 
 export PATH="$HOME/.hermes/bin:$HOME/.local/bin:$PATH"
 
 if command -v hermes >/dev/null 2>&1; then
 
-    green "Hermes already installed."
+    green "Hermes Agent already installed."
     green "Binary: $(command -v hermes)"
 
 else
@@ -233,7 +235,7 @@ else
 fi
 
 if ! command -v hermes >/dev/null 2>&1; then
-    die "Hermes CLI was not found after installation."
+    die "Hermes CLI not found after installation."
 fi
 
 HERMES_BIN="$(command -v hermes)"
@@ -242,28 +244,25 @@ green "Hermes: $HERMES_BIN"
 
 hermes --version || true
 
-# -----------------------------
+# ------------------------------------------------------------
 # Hermes directories
-# -----------------------------
+# ------------------------------------------------------------
 
-cyan "[7/12] Preparing Hermes directories..."
+cyan "[7/13] Preparing Hermes directories..."
 
 mkdir -p "$HERMES_HOME"
 mkdir -p "$HERMES_HOME/skills"
 mkdir -p "$HERMES_HOME/logs"
 mkdir -p "$SYSTEMD_USER_DIR"
 
-# Hermes environment file
-HERMES_ENV="$HERMES_HOME/.env"
-
 touch "$HERMES_ENV"
 
 chmod 700 "$HERMES_HOME"
 chmod 600 "$HERMES_ENV"
 
-# -----------------------------
-# Helper: set env
-# -----------------------------
+# ------------------------------------------------------------
+# Helper
+# ------------------------------------------------------------
 
 set_env() {
 
@@ -286,11 +285,11 @@ set_env() {
     fi
 }
 
-# -----------------------------
+# ------------------------------------------------------------
 # Hermes API configuration
-# -----------------------------
+# ------------------------------------------------------------
 
-cyan "[8/12] Configuring Hermes API..."
+cyan "[8/13] Configuring Hermes API..."
 
 set_env "$HERMES_ENV" \
     "API_SERVER_ENABLED" \
@@ -304,14 +303,13 @@ set_env "$HERMES_ENV" \
     "API_SERVER_PORT" \
     "$GATEWAY_PORT"
 
-green "Hermes API configuration:"
-grep -E '^API_SERVER_' "$HERMES_ENV" || true
+green "Hermes API configured."
 
-# -----------------------------
-# Workspace clone/update
-# -----------------------------
+# ------------------------------------------------------------
+# Workspace clone
+# ------------------------------------------------------------
 
-cyan "[9/12] Installing Hermes Workspace..."
+cyan "[9/13] Installing Hermes Workspace..."
 
 if [[ -d "$WORKSPACE_DIR/.git" ]]; then
 
@@ -330,72 +328,135 @@ cd "$WORKSPACE_DIR"
 
 green "Workspace: $WORKSPACE_DIR"
 
-# -----------------------------
-# Workspace ENV
-# -----------------------------
+# ------------------------------------------------------------
+# Workspace .env
+# ------------------------------------------------------------
 
-if [[ ! -f "$WORKSPACE_DIR/.env" ]]; then
+if [[ ! -f "$WORKSPACE_ENV" ]]; then
 
-    if [[ -f "$WORKSPACE_DIR/.env.example" ]]; then
-        cp "$WORKSPACE_DIR/.env.example" "$WORKSPACE_DIR/.env"
+    if [[ -f ".env.example" ]]; then
+        cp ".env.example" "$WORKSPACE_ENV"
     else
-        touch "$WORKSPACE_DIR/.env"
+        touch "$WORKSPACE_ENV"
     fi
 
 fi
 
-set_env "$WORKSPACE_DIR/.env" \
+set_env "$WORKSPACE_ENV" \
     "HERMES_API_URL" \
     "http://${GATEWAY_HOST}:${GATEWAY_PORT}"
 
-set_env "$WORKSPACE_DIR/.env" \
+set_env "$WORKSPACE_ENV" \
     "HERMES_DASHBOARD_URL" \
     "http://${DASHBOARD_HOST}:${DASHBOARD_PORT}"
 
-set_env "$WORKSPACE_DIR/.env" \
+set_env "$WORKSPACE_ENV" \
     "HOST" \
     "$WORKSPACE_HOST"
 
-set_env "$WORKSPACE_DIR/.env" \
+set_env "$WORKSPACE_ENV" \
     "PORT" \
     "$WORKSPACE_PORT"
 
-set_env "$WORKSPACE_DIR/.env" \
+set_env "$WORKSPACE_ENV" \
     "NODE_ENV" \
     "production"
 
-chmod 600 "$WORKSPACE_DIR/.env"
+chmod 600 "$WORKSPACE_ENV"
 
-# -----------------------------
-# Install workspace dependencies
-# -----------------------------
+# ------------------------------------------------------------
+# Workspace password
+# ------------------------------------------------------------
 
-cyan "Installing Workspace dependencies..."
+cyan "[10/13] Configuring Workspace authentication..."
+
+# Priority:
+#
+# 1. Existing HERMES_PASSWORD in .env
+# 2. Existing password from environment
+# 3. Generate new password
+#
+
+EXISTING_PASSWORD=""
+
+if [[ -f "$WORKSPACE_ENV" ]]; then
+
+    EXISTING_PASSWORD="$(
+        grep '^HERMES_PASSWORD=' "$WORKSPACE_ENV" \
+        | head -1 \
+        | cut -d= -f2- \
+        || true
+    )"
+
+fi
+
+if [[ -n "$EXISTING_PASSWORD" ]]; then
+
+    HERMES_PASSWORD="$EXISTING_PASSWORD"
+
+    green "Existing HERMES_PASSWORD found. Keeping existing password."
+
+elif [[ -n "${HERMES_PASSWORD:-}" ]]; then
+
+    green "Using HERMES_PASSWORD from environment."
+
+else
+
+    HERMES_PASSWORD="$(openssl rand -base64 32 | tr -d '\n')"
+
+    green "Generated a new secure Workspace password."
+
+fi
+
+# Store password in Workspace .env
+set_env "$WORKSPACE_ENV" \
+    "HERMES_PASSWORD" \
+    "$HERMES_PASSWORD"
+
+chmod 600 "$WORKSPACE_ENV"
+
+# Also keep password in a private credentials file.
+CREDENTIALS_FILE="$HERMES_HOME/workspace-password"
+
+printf '%s\n' "$HERMES_PASSWORD" > "$CREDENTIALS_FILE"
+
+chmod 600 "$CREDENTIALS_FILE"
+
+green "Workspace authentication configured."
+
+# ------------------------------------------------------------
+# Install dependencies
+# ------------------------------------------------------------
+
+cyan "[11/13] Installing Workspace dependencies..."
+
+cd "$WORKSPACE_DIR"
 
 pnpm install
 
-# -----------------------------
-# Build Workspace
-# -----------------------------
+green "Dependencies installed."
 
-cyan "Building Hermes Workspace..."
+# ------------------------------------------------------------
+# Build
+# ------------------------------------------------------------
+
+cyan "Building Workspace..."
 
 pnpm build
 
 green "Workspace build completed."
 
-# -----------------------------
-# systemd user environment
-# -----------------------------
+# ------------------------------------------------------------
+# systemd
+# ------------------------------------------------------------
 
-cyan "[10/12] Configuring systemd user services..."
+cyan "[12/13] Creating systemd services..."
 
-# Ensure systemd user services survive logout/reboot
 sudo loginctl enable-linger "$USER_NAME" || true
 
-# ------------------------------------------------
-# Hermes Gateway
-# ------------------------------------------------
+# ------------------------------------------------------------
+# Gateway service
+# ------------------------------------------------------------
 
 cat > "$SYSTEMD_USER_DIR/hermes-gateway.service" <<EOF
 [Unit]
@@ -427,13 +488,13 @@ StandardError=journal
 WantedBy=default.target
 EOF
 
-# ------------------------------------------------
-# Hermes Dashboard
-# ------------------------------------------------
+# ------------------------------------------------------------
+# Dashboard service
+# ------------------------------------------------------------
 
 cat > "$SYSTEMD_USER_DIR/hermes-dashboard.service" <<EOF
 [Unit]
-Description=Hermes Agent Dashboard API
+Description=Hermes Agent Dashboard
 After=hermes-gateway.service network-online.target
 Wants=network-online.target
 
@@ -461,11 +522,9 @@ StandardError=journal
 WantedBy=default.target
 EOF
 
-# ------------------------------------------------
-# Hermes Workspace
-# ------------------------------------------------
-
-PNPM_BIN="$(command -v pnpm)"
+# ------------------------------------------------------------
+# Workspace service
+# ------------------------------------------------------------
 
 cat > "$SYSTEMD_USER_DIR/hermes-workspace.service" <<EOF
 [Unit]
@@ -478,11 +537,17 @@ Type=simple
 
 Environment=HOME=$HOME
 Environment=NODE_ENV=production
+
+# Remote access
 Environment=HOST=$WORKSPACE_HOST
 Environment=PORT=$WORKSPACE_PORT
 
+# Backend services remain localhost
 Environment=HERMES_API_URL=http://$GATEWAY_HOST:$GATEWAY_PORT
 Environment=HERMES_DASHBOARD_URL=http://$DASHBOARD_HOST:$DASHBOARD_PORT
+
+# Workspace authentication
+Environment=HERMES_PASSWORD=$HERMES_PASSWORD
 
 WorkingDirectory=$WORKSPACE_DIR
 
@@ -501,158 +566,206 @@ StandardError=journal
 WantedBy=default.target
 EOF
 
-chmod 644 "$SYSTEMD_USER_DIR/hermes-gateway.service"
-chmod 644 "$SYSTEMD_USER_DIR/hermes-dashboard.service"
-chmod 644 "$SYSTEMD_USER_DIR/hermes-workspace.service"
+chmod 600 "$SYSTEMD_USER_DIR/hermes-gateway.service"
+chmod 600 "$SYSTEMD_USER_DIR/hermes-dashboard.service"
+chmod 600 "$SYSTEMD_USER_DIR/hermes-workspace.service"
 
-# -----------------------------
-# Reload systemd
-# -----------------------------
+# ------------------------------------------------------------
+# Reload
+# ------------------------------------------------------------
 
 systemctl --user daemon-reload
 
-# -----------------------------
-# Stop old services
-# -----------------------------
-
-cyan "[11/12] Restarting Hermes services..."
+# ------------------------------------------------------------
+# Stop existing services
+# ------------------------------------------------------------
 
 systemctl --user stop hermes-workspace.service 2>/dev/null || true
 systemctl --user stop hermes-dashboard.service 2>/dev/null || true
 systemctl --user stop hermes-gateway.service 2>/dev/null || true
 
-# -----------------------------
-# Enable services
-# -----------------------------
+# ------------------------------------------------------------
+# Enable
+# ------------------------------------------------------------
 
 systemctl --user enable hermes-gateway.service
 systemctl --user enable hermes-dashboard.service
 systemctl --user enable hermes-workspace.service
 
-# -----------------------------
+# ------------------------------------------------------------
 # Start
-# -----------------------------
+# ------------------------------------------------------------
+
+cyan "[13/13] Starting Hermes services..."
 
 systemctl --user start hermes-gateway.service
 
-sleep 3
+sleep 4
 
 systemctl --user start hermes-dashboard.service
 
-sleep 3
+sleep 4
 
 systemctl --user start hermes-workspace.service
 
-sleep 5
+sleep 6
 
-# -----------------------------
-# Health check
-# -----------------------------
-
-cyan "[12/12] Running health checks..."
+# ------------------------------------------------------------
+# Health checks
+# ------------------------------------------------------------
 
 echo
-echo "------------------------------------------------------------"
-echo "Hermes Gateway"
-echo "------------------------------------------------------------"
+bold "============================================================"
+bold "                    HEALTH CHECK"
+bold "============================================================"
 
+echo
+
+# Gateway
 if curl -fsS \
     --connect-timeout 5 \
     "http://${GATEWAY_HOST}:${GATEWAY_PORT}/health" \
     >/tmp/hermes-gateway-health.json 2>/dev/null; then
 
-    green "Gateway: OK"
-
-    cat /tmp/hermes-gateway-health.json
-    echo
+    green "Gateway     : OK"
 
 else
 
-    yellow "Gateway health check failed."
-
-    systemctl --user status hermes-gateway.service \
-        --no-pager || true
+    yellow "Gateway     : FAILED"
 
 fi
 
-echo
-echo "------------------------------------------------------------"
-echo "Hermes Dashboard"
-echo "------------------------------------------------------------"
-
+# Dashboard
 if curl -fsS \
     --connect-timeout 5 \
     "http://${DASHBOARD_HOST}:${DASHBOARD_PORT}/api/status" \
     >/tmp/hermes-dashboard-health.json 2>/dev/null; then
 
-    green "Dashboard: OK"
-
-    cat /tmp/hermes-dashboard-health.json
-    echo
+    green "Dashboard   : OK"
 
 else
 
-    yellow "Dashboard API check failed."
-
-    systemctl --user status hermes-dashboard.service \
-        --no-pager || true
+    yellow "Dashboard   : FAILED"
 
 fi
 
-echo
-echo "------------------------------------------------------------"
-echo "Hermes Workspace"
-echo "------------------------------------------------------------"
-
+# Workspace
 if curl -fsS \
     --connect-timeout 5 \
-    "http://${WORKSPACE_HOST}:${WORKSPACE_PORT}" \
+    "http://127.0.0.1:${WORKSPACE_PORT}" \
     >/dev/null 2>&1; then
 
-    green "Workspace: OK"
+    green "Workspace   : OK"
 
 else
 
-    yellow "Workspace HTTP check failed."
-
-    systemctl --user status hermes-workspace.service \
-        --no-pager || true
+    yellow "Workspace   : FAILED"
 
 fi
 
-# -----------------------------
-# Service status
-# -----------------------------
+# ------------------------------------------------------------
+# Ports
+# ------------------------------------------------------------
+
+echo
+bold "Listening ports:"
+echo
+
+ss -lntp 2>/dev/null \
+    | grep -E ":${GATEWAY_PORT}|:${DASHBOARD_PORT}|:${WORKSPACE_PORT}" \
+    || true
+
+# ------------------------------------------------------------
+# Tailscale detection
+# ------------------------------------------------------------
+
+echo
+bold "Tailscale:"
+echo
+
+if command -v tailscale >/dev/null 2>&1; then
+
+    TAILSCALE_IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+
+    if [[ -n "$TAILSCALE_IP" ]]; then
+
+        green "Tailscale IP: $TAILSCALE_IP"
+
+        echo
+        echo "Workspace URL:"
+        echo
+        echo "  http://${TAILSCALE_IP}:${WORKSPACE_PORT}"
+
+    else
+
+        yellow "Tailscale installed but no IP detected."
+
+    fi
+
+else
+
+    yellow "Tailscale is not installed."
+
+    echo
+    echo "Install with:"
+    echo
+    echo "  curl -fsSL https://tailscale.com/install.sh | sh"
+    echo "  sudo tailscale up"
+
+fi
+
+# ------------------------------------------------------------
+# Password
+# ------------------------------------------------------------
 
 echo
 bold "============================================================"
-bold "             HERMES INSTALLATION COMPLETE"
+bold "             WORKSPACE CREDENTIALS"
+bold "============================================================"
+
+echo
+echo "Password is stored securely at:"
+echo
+echo "  $CREDENTIALS_FILE"
+echo
+echo "Show password:"
+echo
+echo "  cat $CREDENTIALS_FILE"
+echo
+
+# ------------------------------------------------------------
+# Final
+# ------------------------------------------------------------
+
+bold "============================================================"
+bold "              HERMES INSTALLATION COMPLETE"
 bold "============================================================"
 
 echo
 
 echo "Services:"
 echo
-echo "  Hermes Gateway"
+echo "  Gateway:"
 echo "    http://${GATEWAY_HOST}:${GATEWAY_PORT}"
 echo
-echo "  Hermes Dashboard"
+echo "  Dashboard:"
 echo "    http://${DASHBOARD_HOST}:${DASHBOARD_PORT}"
 echo
-echo "  Hermes Workspace"
+echo "  Workspace:"
 echo "    http://${WORKSPACE_HOST}:${WORKSPACE_PORT}"
 echo
 
-echo "Installation:"
+echo "Workspace directory:"
 echo
-echo "  Hermes Home:"
-echo "    $HERMES_HOME"
-echo
-echo "  Workspace:"
-echo "    $WORKSPACE_DIR"
+echo "  $WORKSPACE_DIR"
 echo
 
-echo "Systemd:"
+echo "Hermes directory:"
+echo
+echo "  $HERMES_HOME"
+echo
+
+echo "Systemd status:"
 echo
 echo "  systemctl --user status hermes-gateway"
 echo "  systemctl --user status hermes-dashboard"
@@ -666,19 +779,11 @@ echo "  journalctl --user -u hermes-dashboard -f"
 echo "  journalctl --user -u hermes-workspace -f"
 echo
 
-echo "Restart all:"
+echo "Remote access:"
 echo
-echo "  systemctl --user restart hermes-gateway"
-echo "  systemctl --user restart hermes-dashboard"
-echo "  systemctl --user restart hermes-workspace"
+echo "  Use the Tailscale IP + :3000"
 echo
 
-echo "Status:"
-echo
-systemctl --user --no-pager --type=service \
-    | grep -E 'hermes-(gateway|dashboard|workspace)' \
-    || true
-
-echo
 green "Hermes is ready."
 echo
+```
