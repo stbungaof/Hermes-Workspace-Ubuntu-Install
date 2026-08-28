@@ -303,6 +303,13 @@ set_env "$HERMES_ENV" \
     "API_SERVER_PORT" \
     "$GATEWAY_PORT"
 
+# Allow all gateway users.
+# Workspace authentication and Tailscale/LAN access remain responsible
+# for protecting the remote control plane.
+set_env "$HERMES_ENV" \
+    "GATEWAY_ALLOW_ALL_USERS" \
+    "true"
+
 green "Hermes API configured."
 
 # ------------------------------------------------------------
@@ -361,6 +368,13 @@ set_env "$WORKSPACE_ENV" \
 set_env "$WORKSPACE_ENV" \
     "NODE_ENV" \
     "production"
+
+# Workspace is exposed over HTTP on LAN/Tailscale.
+# Disable the Secure cookie flag because browsers reject Secure cookies
+# when the site is accessed over plain HTTP.
+set_env "$WORKSPACE_ENV" \
+    "COOKIE_SECURE" \
+    "0"
 
 chmod 600 "$WORKSPACE_ENV"
 
@@ -470,6 +484,7 @@ Type=simple
 Environment=HOME=$HOME
 Environment=HERMES_HOME=$HERMES_HOME
 Environment=PATH=$HOME/.hermes/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-$HERMES_ENV
 
 WorkingDirectory=$HERMES_HOME
 
