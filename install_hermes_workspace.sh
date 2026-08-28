@@ -1,4 +1,4 @@
-```bash
+bash
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -786,4 +786,3 @@ echo
 
 green "Hermes is ready."
 echo
-```
