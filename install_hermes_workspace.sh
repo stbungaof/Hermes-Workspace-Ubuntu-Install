@@ -1,4 +1,3 @@
-bash
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -17,8 +16,6 @@ set -Eeuo pipefail
 # Remote access:
 #   Tailscale / LAN
 #
-# Security:
-#   HERMES_PASSWORD is automatically generated if missing.
 #
 # No Nginx required.
 # ============================================================
@@ -37,6 +34,8 @@ GATEWAY_PORT="${GATEWAY_PORT:-8642}"
 
 DASHBOARD_HOST="${DASHBOARD_HOST:-127.0.0.1}"
 DASHBOARD_PORT="${DASHBOARD_PORT:-9119}"
+
+API_SERVER_KEY="6377560380212b377d4dd4ecf00cf90aaa1ca9a9acd593394c20a963d01bb353"
 
 # Workspace must listen on non-loopback for remote access.
 WORKSPACE_HOST="${WORKSPACE_HOST:-0.0.0.0}"
@@ -84,7 +83,6 @@ cat <<'EOF'
    Hermes Workspace  : 0.0.0.0:3000
 
    Remote access     : Tailscale / LAN
-   Authentication    : HERMES_PASSWORD
    Init system       : systemd --user
 
    No Nginx required.
@@ -296,12 +294,18 @@ set_env "$HERMES_ENV" \
     "true"
 
 set_env "$HERMES_ENV" \
+    "API_SERVER_KEY" \
+    "$API_SERVER_KEY"
+
+set_env "$HERMES_ENV" \
     "API_SERVER_HOST" \
     "$GATEWAY_HOST"
 
 set_env "$HERMES_ENV" \
     "API_SERVER_PORT" \
     "$GATEWAY_PORT"
+
+    
 
 # Allow all gateway users.
 # Workspace authentication and Tailscale/LAN access remain responsible
@@ -369,6 +373,12 @@ set_env "$WORKSPACE_ENV" \
     "NODE_ENV" \
     "production"
 
+set_env "$WORKSPACE_ENV" \
+    "HERMES_API_TOKEN" \
+    "$API_SERVER_KEY"
+    
+
+
 # Workspace is exposed over HTTP on LAN/Tailscale.
 # Disable the Secure cookie flag because browsers reject Secure cookies
 # when the site is accessed over plain HTTP.
@@ -379,70 +389,10 @@ set_env "$WORKSPACE_ENV" \
 chmod 600 "$WORKSPACE_ENV"
 
 # ------------------------------------------------------------
-# Workspace password
-# ------------------------------------------------------------
-
-cyan "[10/13] Configuring Workspace authentication..."
-
-# Priority:
-#
-# 1. Existing HERMES_PASSWORD in .env
-# 2. Existing password from environment
-# 3. Generate new password
-#
-
-EXISTING_PASSWORD=""
-
-if [[ -f "$WORKSPACE_ENV" ]]; then
-
-    EXISTING_PASSWORD="$(
-        grep '^HERMES_PASSWORD=' "$WORKSPACE_ENV" \
-        | head -1 \
-        | cut -d= -f2- \
-        || true
-    )"
-
-fi
-
-if [[ -n "$EXISTING_PASSWORD" ]]; then
-
-    HERMES_PASSWORD="$EXISTING_PASSWORD"
-
-    green "Existing HERMES_PASSWORD found. Keeping existing password."
-
-elif [[ -n "${HERMES_PASSWORD:-}" ]]; then
-
-    green "Using HERMES_PASSWORD from environment."
-
-else
-
-    HERMES_PASSWORD="$(openssl rand -base64 32 | tr -d '\n')"
-
-    green "Generated a new secure Workspace password."
-
-fi
-
-# Store password in Workspace .env
-set_env "$WORKSPACE_ENV" \
-    "HERMES_PASSWORD" \
-    "$HERMES_PASSWORD"
-
-chmod 600 "$WORKSPACE_ENV"
-
-# Also keep password in a private credentials file.
-CREDENTIALS_FILE="$HERMES_HOME/workspace-password"
-
-printf '%s\n' "$HERMES_PASSWORD" > "$CREDENTIALS_FILE"
-
-chmod 600 "$CREDENTIALS_FILE"
-
-green "Workspace authentication configured."
-
-# ------------------------------------------------------------
 # Install dependencies
 # ------------------------------------------------------------
 
-cyan "[11/13] Installing Workspace dependencies..."
+cyan "[10/12] Installing Workspace dependencies..."
 
 cd "$WORKSPACE_DIR"
 
@@ -464,7 +414,7 @@ green "Workspace build completed."
 # systemd
 # ------------------------------------------------------------
 
-cyan "[12/13] Creating systemd services..."
+cyan "[11/12] Creating systemd services..."
 
 sudo loginctl enable-linger "$USER_NAME" || true
 
@@ -560,9 +510,8 @@ Environment=PORT=$WORKSPACE_PORT
 # Backend services remain localhost
 Environment=HERMES_API_URL=http://$GATEWAY_HOST:$GATEWAY_PORT
 Environment=HERMES_DASHBOARD_URL=http://$DASHBOARD_HOST:$DASHBOARD_PORT
+Environment=HERMES_API_TOKEN=$API_SERVER_KEY
 
-# Workspace authentication
-Environment=HERMES_PASSWORD=$HERMES_PASSWORD
 
 WorkingDirectory=$WORKSPACE_DIR
 
@@ -611,7 +560,7 @@ systemctl --user enable hermes-workspace.service
 # Start
 # ------------------------------------------------------------
 
-cyan "[13/13] Starting Hermes services..."
+cyan "[12/12] Starting Hermes services..."
 
 systemctl --user start hermes-gateway.service
 
@@ -689,64 +638,6 @@ echo
 ss -lntp 2>/dev/null \
     | grep -E ":${GATEWAY_PORT}|:${DASHBOARD_PORT}|:${WORKSPACE_PORT}" \
     || true
-
-# ------------------------------------------------------------
-# Tailscale detection
-# ------------------------------------------------------------
-
-echo
-bold "Tailscale:"
-echo
-
-if command -v tailscale >/dev/null 2>&1; then
-
-    TAILSCALE_IP="$(tailscale ip -4 2>/dev/null | head -1 || true)"
-
-    if [[ -n "$TAILSCALE_IP" ]]; then
-
-        green "Tailscale IP: $TAILSCALE_IP"
-
-        echo
-        echo "Workspace URL:"
-        echo
-        echo "  http://${TAILSCALE_IP}:${WORKSPACE_PORT}"
-
-    else
-
-        yellow "Tailscale installed but no IP detected."
-
-    fi
-
-else
-
-    yellow "Tailscale is not installed."
-
-    echo
-    echo "Install with:"
-    echo
-    echo "  curl -fsSL https://tailscale.com/install.sh | sh"
-    echo "  sudo tailscale up"
-
-fi
-
-# ------------------------------------------------------------
-# Password
-# ------------------------------------------------------------
-
-echo
-bold "============================================================"
-bold "             WORKSPACE CREDENTIALS"
-bold "============================================================"
-
-echo
-echo "Password is stored securely at:"
-echo
-echo "  $CREDENTIALS_FILE"
-echo
-echo "Show password:"
-echo
-echo "  cat $CREDENTIALS_FILE"
-echo
 
 # ------------------------------------------------------------
 # Final
