@@ -2826,3 +2826,27 @@ Hermes Workspace:
 MIT
 
 โปรดตรวจสอบ license และเงื่อนไขของ dependencies ที่เกี่ยวข้องก่อนนำไปใช้ใน production/commercial environment
+
+Systemd:
+
+  systemctl --user status hermes-gateway
+  systemctl --user status hermes-dashboard
+  systemctl --user status hermes-workspace
+
+Logs:
+
+  journalctl --user -u hermes-gateway -f
+  journalctl --user -u hermes-dashboard -f
+  journalctl --user -u hermes-workspace -f
+
+Restart all:
+
+  systemctl --user restart hermes-gateway
+  systemctl --user restart hermes-dashboard
+  systemctl --user restart hermes-workspace
+
+Status:
+
+  hermes-dashboard.service loaded active     running      Hermes Agent Dashboard API
+  hermes-gateway.service   loaded active     running      Hermes Agent Gateway - Messaging Platform Integration
+  hermes-workspace.service loaded activating auto-restart Hermes Workspace
